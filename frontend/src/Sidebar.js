@@ -8,9 +8,7 @@ function Sidebar() {
 
   const menu = [
     { name: "Dashboard", path: "/dashboard", icon: LayoutDashboard },
-    { name: "Live Monitoring", path: "/monitoring", icon: Activity },
-    { name: "Alerts", path: "/alerts", icon: Bell },
-    { name: "Settings", path: "/settings", icon: Settings },
+  
   ];
 
   return (
