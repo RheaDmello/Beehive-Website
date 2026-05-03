@@ -33,6 +33,11 @@ encoder.fit(["bee", "nobee", "noqueen"])
 # yolov8n.pt is a COCO model — it has NO bee/wasp classes and will NEVER detect them
 YOLO_MODEL_PATH = "/Users/rhea.dmello/Desktop/Code/Beehive Project/backend/yolov8_bee_wasp_repacked (2).pt"
 yolo_model = YOLO(YOLO_MODEL_PATH)
+# ── Load Bee Counter Model ──
+BEE_COUNTER_MODEL_PATH = "/Users/rhea.dmello/Desktop/Code/Beehive Project/backend/best.pt"
+bee_counter_model = YOLO(BEE_COUNTER_MODEL_PATH)
+print(f"✅ Bee counter model loaded.")
+print(f"   Classes: {bee_counter_model.names}")
 
 # ── Verify model classes on startup ──
 print(f"✅ YOLO model loaded.")
@@ -140,6 +145,10 @@ async def predict_video(file: UploadFile = File(...)):
         bee_score  = 0.0
         wasp_score = 0.0
 
+        # ── Bee count tracking ──
+        total_bees_detected = 0
+        peak_bees_in_frame  = 0
+
         frames_processed = 0
         analyzed_frames  = 0
 
@@ -158,8 +167,10 @@ async def predict_video(file: UploadFile = File(...)):
 
             analyzed_frames += 1
             frame = cv2.resize(frame, (640, 480))
-            results = yolo_model(frame, imgsz=640, verbose=False)
-            boxes   = results[0].boxes
+
+            # ── Model 1: Bee vs Wasp classification ──
+            results  = yolo_model(frame, imgsz=640, verbose=False)
+            boxes    = results[0].boxes
 
             if boxes is not None and len(boxes) > 0:
                 for box in boxes:
@@ -167,11 +178,9 @@ async def predict_video(file: UploadFile = File(...)):
                     det_conf = float(box.conf[0])
                     cls_name = yolo_model.names[cls_id]
 
-                    # 🔍 Debug — shows exactly what the model detects each frame
                     print(f"   → Frame {analyzed_frames}: class_id={cls_id}, "
-                          f"name='{cls_name}', conf={det_conf:.2f}")
+                        f"name='{cls_name}', conf={det_conf:.2f}")
 
-                    # Skip low-confidence detections and "other" class
                     if det_conf < 0.3 or cls_name not in BEE_CLASS_NAMES | WASP_CLASS_NAMES:
                         print(f"      ⚠️  Skipped: low conf or unrecognized class '{cls_name}'")
                         continue
@@ -181,21 +190,40 @@ async def predict_video(file: UploadFile = File(...)):
                     elif cls_name in WASP_CLASS_NAMES:
                         wasp_score += det_conf
 
+            # ── Model 2: Bee counter ──
+            count_results = bee_counter_model(
+                frame,
+                conf=0.15,       # lower threshold — tuned for counting
+                iou=0.45,
+                imgsz=640,
+                max_det=300,
+                verbose=False
+            )
+            count_boxes = count_results[0].boxes
+            bees_this_frame = len(count_boxes) if count_boxes is not None else 0
+
+            total_bees_detected += bees_this_frame
+            peak_bees_in_frame   = max(peak_bees_in_frame, bees_this_frame)
+
+            print(f"   🐝 Bee count this frame: {bees_this_frame}")
+
         cap.release()
 
+        avg_bees_per_frame = round(total_bees_detected / analyzed_frames, 1) if analyzed_frames > 0 else 0.0
+
         print(f"📊 bee_score={bee_score:.2f} | wasp_score={wasp_score:.2f}")
+        print(f"🐝 total_bees={total_bees_detected} | peak={peak_bees_in_frame} | avg={avg_bees_per_frame}")
         print(f"🎞  Analyzed {analyzed_frames} / {frames_processed} frames")
 
         total_score = bee_score + wasp_score
 
         # ── Determine result ──
         if total_score == 0:
-            # No bee or wasp detected at all — do NOT default to wasp
             predicted_class = "UNKNOWN"
             confidence      = 0.0
             hive_health     = "No bees or wasps detected — check model classes"
             print("⚠️  total_score=0 — model may not have bee/wasp classes. "
-                  f"Check: {yolo_model.names}")
+                f"Check: {yolo_model.names}")
 
         elif bee_score >= wasp_score:
             predicted_class = "BEE"
@@ -210,13 +238,16 @@ async def predict_video(file: UploadFile = File(...)):
         print(f"✅ Final: {predicted_class} ({confidence}%)")
 
         return {
-            "predicted_class":  predicted_class,
-            "confidence":       confidence,
-            "hive_health":      hive_health,
-            "bee_score":        round(bee_score, 2),
-            "wasp_score":       round(wasp_score, 2),
-            "frames_analyzed":  analyzed_frames,
-            "frames_processed": frames_processed,
+            "predicted_class":      predicted_class,
+            "confidence":           confidence,
+            "hive_health":          hive_health,
+            "bee_score":            round(bee_score, 2),
+            "wasp_score":           round(wasp_score, 2),
+            "frames_analyzed":      analyzed_frames,
+            "frames_processed":     frames_processed,
+            "total_bees_detected":  total_bees_detected,
+            "avg_bees_per_frame":   avg_bees_per_frame,
+            "peak_bees_in_frame":   peak_bees_in_frame,
         }
 
     except Exception as e:
